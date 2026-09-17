@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <style>
   :root{
     --sage:#6B8F71;
@@ -294,6 +295,27 @@
   </div>
 </div>
 
+<!-- ================= MODAL MOVER LEAD ================= -->
+<div id="move-modal" style="display:none;position:fixed;inset:0;background:rgba(43,46,42,.45);z-index:50;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:4px;padding:26px 28px;width:min(420px,90vw);">
+    <h3 style="margin:0 0 4px;font-family:'Fraunces';font-size:18px;color:var(--sage-darker);" id="mm-title">Mover lead</h3>
+    <p style="margin:0 0 18px;font-size:13px;color:var(--ink-soft);" id="mm-sub"></p>
+    <div class="field">
+      <label>Nueva etapa</label>
+      <select id="mm-etapa" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;"></select>
+    </div>
+    <div class="field">
+      <label>Comentario (obligatorio)</label>
+      <textarea id="mm-comentario" rows="3" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:14px;"></textarea>
+    </div>
+    <div id="mm-msg" style="font-size:13px;color:var(--terracotta);margin-bottom:8px;"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button onclick="closeMoveModal()" style="padding:9px 16px;border:1px solid var(--line);background:#fff;border-radius:3px;font-family:inherit;cursor:pointer;">Cancelar</button>
+      <button onclick="confirmMoverLead()" class="btn-primary" style="width:auto;margin:0;">Guardar cambio</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const SUPABASE_URL = 'https://rlffvquhwaeduinnzuwk.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Md-7y2DpPlvkrAQ5nQhE_Q_tL9jAhlh';
@@ -446,13 +468,26 @@ async function renderDashboard(){
 }
 
 // ---------- PIPELINE ----------
-async function pipelineBoardHtml(){
+async function fetchPipelineFiltrado(){
   const soyCloser = currentUser.rol === 'closer' && !ve_todo(currentUser);
-  let q = sb.from('pipeline').select('id, etapa, contactos(nombre, closer_id)');
+  let q = sb.from('pipeline').select('id, etapa, fecha_cambio_etapa, contacto_id, contactos(nombre, closer_id, telefono, origen)');
   const { data, error } = await q;
   if(error) throw error;
-  const filtrado = soyCloser ? (data||[]).filter(p => p.contactos && p.contactos.closer_id === currentUser.id) : (data||[]);
+  return soyCloser ? (data||[]).filter(p => p.contactos && p.contactos.closer_id === currentUser.id) : (data||[]);
+}
 
+function leadCardHtml(p){
+  const nombre = p.contactos ? p.contactos.nombre : 'Sin nombre';
+  const nombreEsc = nombre.replace(/'/g,"\\'");
+  return `<div class="lead-card">
+    <div>${nombre}</div>
+    <button onclick="openMoveModal('${p.id}','${p.contacto_id}','${nombreEsc}','${p.etapa}')"
+      style="margin-top:4px;font-size:11px;padding:2px 7px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;">Mover</button>
+  </div>`;
+}
+
+async function pipelineBoardHtml(){
+  const filtrado = await fetchPipelineFiltrado();
   let html = '<div class="pipeline-row">';
   STAGES.forEach(([key,label,color])=>{
     const leads = filtrado.filter(p=>p.etapa===key);
@@ -462,9 +497,7 @@ async function pipelineBoardHtml(){
     if(leads.length === 0){
       html += `<span style="opacity:.6">Sin leads</span>`;
     } else {
-      leads.forEach(l=>{
-        html += `<div class="lead-card">${l.contactos ? l.contactos.nombre : 'Sin nombre'}</div>`;
-      });
+      leads.forEach(l=>{ html += leadCardHtml(l); });
     }
     html += `</div></div>`;
   });
@@ -472,18 +505,92 @@ async function pipelineBoardHtml(){
   return html;
 }
 
+async function nuevosLeadsHtml(){
+  const filtrado = await fetchPipelineFiltrado();
+  const nuevos = filtrado.filter(p=>p.etapa==='contacto_nuevo')
+    .sort((a,b)=> new Date(b.fecha_cambio_etapa) - new Date(a.fecha_cambio_etapa));
+  if(nuevos.length === 0){
+    return `<div style="color:var(--ink-soft);font-size:14px;">No hay leads nuevos sin procesar ahora mismo.</div>`;
+  }
+  const filas = nuevos.map(p=>`
+    <tr>
+      <td style="padding:8px;">${p.contactos ? p.contactos.nombre : '—'}</td>
+      <td style="padding:8px;">${p.contactos ? (p.contactos.telefono||'—') : '—'}</td>
+      <td style="padding:8px;">${p.contactos ? (p.contactos.origen||'—') : '—'}</td>
+      <td style="padding:8px;">${new Date(p.fecha_cambio_etapa).toLocaleString('es-ES')}</td>
+      <td style="padding:8px;"><button onclick="openMoveModal('${p.id}','${p.contacto_id}','${(p.contactos?p.contactos.nombre:'').replace(/'/g,"\\'")}','${p.etapa}')"
+        style="font-size:12px;padding:4px 9px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;">Procesar / mover</button></td>
+    </tr>`).join('');
+  return `<table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+    <thead><tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
+      <th style="padding:8px;">Nombre</th><th style="padding:8px;">Teléfono</th><th style="padding:8px;">Origen</th>
+      <th style="padding:8px;">Entró el</th><th style="padding:8px;"></th>
+    </tr></thead><tbody>${filas}</tbody></table>`;
+}
+
+let pipelineTab = 'todos';
+
 async function renderPipeline(){
-  const html = await pipelineBoardHtml();
-  return `<div class="panel"><h3>Pipeline completo</h3>${html}</div>`;
+  const cuerpo = pipelineTab === 'nuevos' ? await nuevosLeadsHtml() : await pipelineBoardHtml();
+  return `<div class="panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h3 style="margin:0;">${pipelineTab==='nuevos' ? 'Leads nuevos' : 'Pipeline completo'}</h3>
+      <div style="display:flex;gap:6px;">
+        <button onclick="switchPipelineTab('todos')" style="font-size:12.5px;padding:6px 12px;border-radius:3px;border:1px solid var(--line);cursor:pointer;background:${pipelineTab==='todos'?'var(--sage-deep)':'#fff'};color:${pipelineTab==='todos'?'#fff':'var(--ink)'};">Vista completa</button>
+        <button onclick="switchPipelineTab('nuevos')" style="font-size:12.5px;padding:6px 12px;border-radius:3px;border:1px solid var(--line);cursor:pointer;background:${pipelineTab==='nuevos'?'var(--sage-deep)':'#fff'};color:${pipelineTab==='nuevos'?'#fff':'var(--ink)'};">Nuevos leads</button>
+      </div>
+    </div>
+    ${cuerpo}
+  </div>`;
+}
+
+function switchPipelineTab(tab){
+  pipelineTab = tab;
+  renderSection('pipeline');
+}
+
+// ---------- MODAL MOVER LEAD ----------
+function openMoveModal(pipelineId, contactoId, contactoNombre, etapaActual){
+  moveContext = { pipelineId, contactoId, etapaActual };
+  document.getElementById('mm-sub').textContent = contactoNombre;
+  const sel = document.getElementById('mm-etapa');
+  sel.innerHTML = STAGES.map(([key,label])=>`<option value="${key}" ${key===etapaActual?'selected':''}>${label}</option>`).join('');
+  document.getElementById('mm-comentario').value = '';
+  document.getElementById('mm-msg').textContent = '';
+  document.getElementById('move-modal').style.display = 'flex';
+}
+function closeMoveModal(){
+  document.getElementById('move-modal').style.display = 'none';
+  moveContext = null;
+}
+async function confirmMoverLead(){
+  const nuevaEtapa = document.getElementById('mm-etapa').value;
+  const comentario = document.getElementById('mm-comentario').value.trim();
+  const msg = document.getElementById('mm-msg');
+  if(!comentario){ msg.textContent = 'El comentario es obligatorio para registrar el cambio.'; return; }
+  if(nuevaEtapa === moveContext.etapaActual){ msg.textContent = 'Elige una etapa distinta a la actual.'; return; }
+
+  const { error: e1 } = await sb.from('pipeline').update({ etapa: nuevaEtapa, fecha_cambio_etapa: new Date().toISOString() }).eq('id', moveContext.pipelineId);
+  if(e1){ msg.textContent = 'Error: ' + e1.message; return; }
+  const { error: e2 } = await sb.from('pipeline_historial').insert({
+    contacto_id: moveContext.contactoId, etapa_anterior: moveContext.etapaActual, etapa_nueva: nuevaEtapa,
+    comentario, usuario_id: currentUser.id
+  });
+  if(e2){ msg.textContent = 'Error al guardar el historial: ' + e2.message; return; }
+
+  closeMoveModal();
+  renderSection('pipeline');
 }
 
 // ---------- CONTACTOS ----------
 async function renderContactos(){
   const soyCloser = currentUser.rol === 'closer' && !ve_todo(currentUser);
-  let q = sb.from('contactos').select('id, nombre, telefono, tratamiento_interes, estado, closer_id, usuarios(nombre)').order('creado_en', {ascending:false});
+  let q = sb.from('contactos').select('id, nombre, telefono, email, origen, tratamiento_interes, estado, closer_id, usuarios(nombre)').order('creado_en', {ascending:false});
   if(soyCloser) q = q.eq('closer_id', currentUser.id);
   const { data, error } = await q;
   if(error) throw error;
+
+  window._contactosCache = data || [];
 
   let rows = (data||[]).map(c => `
     <tr>
@@ -493,11 +600,20 @@ async function renderContactos(){
       <td>${c.usuarios ? c.usuarios.nombre : '—'}</td>
       <td>${c.estado}</td>
     </tr>`).join('');
-  if(!rows) rows = `<tr><td colspan="5" style="color:var(--ink-soft);padding:14px 0;">Todavía no hay contactos. Añade el primero abajo.</td></tr>`;
+  if(!rows) rows = `<tr><td colspan="5" style="color:var(--ink-soft);padding:14px 0;">Todavía no hay contactos. Añade el primero abajo, o importa un CSV.</td></tr>`;
 
   return `
     <div class="panel">
-      <h3>Contactos</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <h3 style="margin:0;">Contactos</h3>
+        <div style="display:flex;gap:8px;">
+          <button onclick="exportContactosCSV()" style="font-size:12.5px;padding:7px 13px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;">Exportar CSV</button>
+          <label style="font-size:12.5px;padding:7px 13px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;">
+            Importar CSV
+            <input type="file" accept=".csv" onchange="importContactosCSV(event)" style="display:none;">
+          </label>
+        </div>
+      </div>
       <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
         <thead>
           <tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
@@ -507,6 +623,7 @@ async function renderContactos(){
         </thead>
         <tbody>${rows}</tbody>
       </table>
+      <div id="ci-msg" style="margin-top:10px;font-size:13px;"></div>
     </div>
     <div class="panel">
       <h3>Añadir contacto</h3>
@@ -520,6 +637,68 @@ async function renderContactos(){
       <div id="nc-msg" style="margin-top:10px;font-size:13px;"></div>
     </div>
   `;
+}
+
+function exportContactosCSV(){
+  const data = window._contactosCache || [];
+  const cabecera = ['nombre','telefono','email','origen','tratamiento_interes','estado','closer'];
+  const filas = data.map(c => [
+    c.nombre||'', c.telefono||'', c.email||'', c.origen||'', c.tratamiento_interes||'', c.estado||'',
+    c.usuarios ? c.usuarios.nombre : ''
+  ]);
+  const csv = Papa.unparse({ fields: cabecera, data: filas });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'contactos_zeren_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importContactosCSV(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const msg = document.getElementById('ci-msg');
+  msg.style.color = 'var(--ink-soft)';
+  msg.textContent = 'Procesando archivo…';
+
+  Papa.parse(file, {
+    header: true,
+    skipEmptyLines: true,
+    complete: async (results) => {
+      const filas = results.data;
+      let creados = 0, errores = 0;
+      for(const fila of filas){
+        const nombre = (fila.nombre || fila.Nombre || '').trim();
+        if(!nombre) continue;
+        const payload = {
+          nombre,
+          telefono: (fila.telefono || fila.Telefono || '').trim() || null,
+          email: (fila.email || fila.Email || '').trim() || null,
+          origen: (fila.origen || fila.Origen || 'Importación CSV').trim() || null,
+          tratamiento_interes: (fila.tratamiento_interes || fila.tratamiento || '').trim() || null,
+          closer_id: currentUser.rol === 'closer' ? currentUser.id : null,
+          estado: 'activo'
+        };
+        const { data, error } = await sb.from('contactos').insert(payload).select().maybeSingle();
+        if(error || !data){ errores++; continue; }
+        await sb.from('pipeline').insert({ contacto_id: data.id, etapa: 'contacto_nuevo' });
+        await sb.from('pipeline_historial').insert({
+          contacto_id: data.id, etapa_anterior: null, etapa_nueva: 'contacto_nuevo',
+          comentario: 'Alta por importación CSV', usuario_id: currentUser.id
+        });
+        creados++;
+      }
+      msg.style.color = errores ? 'var(--terracotta)' : 'var(--sage-deep)';
+      msg.textContent = `Importación completa: ${creados} contacto(s) creados` + (errores ? `, ${errores} con error.` : '.');
+      renderSection('contactos');
+    },
+    error: (err) => {
+      msg.style.color = 'var(--terracotta)';
+      msg.textContent = 'Error al leer el CSV: ' + err.message;
+    }
+  });
 }
 
 async function crearContacto(){
