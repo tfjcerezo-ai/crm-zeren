@@ -394,6 +394,7 @@ async function renderSection(key){
     else if(key === 'pipeline') content.innerHTML = await renderPipeline();
     else if(key === 'contactos') content.innerHTML = await renderContactos();
     else if(key === 'equipo') content.innerHTML = await renderEquipo();
+    else if(key === 'calendario') content.innerHTML = await renderCalendario();
     else content.innerHTML = placeholder(key);
   }catch(e){
     content.innerHTML = `<div class="panel placeholder"><span class="tag">Error</span><div>${e.message}</div></div>`;
@@ -693,6 +694,176 @@ async function crearComision(){
   msg.textContent = 'Comisión registrada correctamente.';
   msg.style.color = 'var(--sage-deep)';
   renderSection('equipo');
+}
+
+// ---------- CALENDARIO ----------
+const TIPO_EVENTO_LABEL = {
+  visita_comercial: 'Visita comercial',
+  procedimiento_medico: 'Procedimiento médico',
+  seguimiento: 'Seguimiento',
+  otro: 'Otro'
+};
+const TIPO_EVENTO_COLOR = {
+  visita_comercial: 'var(--sage)',
+  procedimiento_medico: 'var(--st-contactado)',
+  seguimiento: 'var(--st-seguimiento)',
+  otro: 'var(--ink-soft)'
+};
+
+async function renderCalendario(){
+  const esMedicoNormal = currentUser.rol === 'medico' && !currentUser.es_gerente;
+  const esCloserNormal = currentUser.rol === 'closer' && !currentUser.es_coordinador;
+
+  let q = sb.from('calendario')
+    .select('id, tipo_evento, tipo_evento_descripcion, fecha_hora_inicio, fecha_hora_fin, estado, notas, contactos(nombre), closer:usuarios!calendario_closer_id_fkey(nombre), medico:usuarios!calendario_medico_id_fkey(nombre)')
+    .order('fecha_hora_inicio', {ascending:true});
+
+  if(esCloserNormal) q = q.eq('closer_id', currentUser.id);
+  if(esMedicoNormal) q = q.eq('medico_id', currentUser.id);
+
+  const { data: eventos, error } = await q;
+  if(error) throw error;
+
+  const ahora = new Date();
+  const hoyStr = ahora.toDateString();
+  const finSemana = new Date(ahora); finSemana.setDate(finSemana.getDate()+7);
+
+  const hoy = (eventos||[]).filter(e=> new Date(e.fecha_hora_inicio).toDateString() === hoyStr && e.estado==='programado').length;
+  const semana = (eventos||[]).filter(e=> {
+    const f = new Date(e.fecha_hora_inicio);
+    return f >= ahora && f <= finSemana && e.estado==='programado';
+  }).length;
+  const pendientesTotal = (eventos||[]).filter(e=>e.estado==='programado').length;
+
+  const filas = (eventos||[]).map(e=>{
+    const f = new Date(e.fecha_hora_inicio);
+    const color = TIPO_EVENTO_COLOR[e.tipo_evento] || 'var(--ink-soft)';
+    const tipoTexto = e.tipo_evento === 'otro' && e.tipo_evento_descripcion
+      ? `Otro — ${e.tipo_evento_descripcion}` : TIPO_EVENTO_LABEL[e.tipo_evento];
+    const estadoTexto = e.estado === 'programado' ? 'Programado' : e.estado === 'completado' ? 'Completado' : 'Cancelado';
+    const acciones = e.estado === 'programado'
+      ? `<button onclick="cambiarEstadoEvento('${e.id}','completado')" style="font-size:11.5px;padding:3px 8px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;margin-right:4px;">Completar</button>
+         <button onclick="cambiarEstadoEvento('${e.id}','cancelado')" style="font-size:11.5px;padding:3px 8px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;">Cancelar</button>`
+      : `<span style="color:var(--ink-soft);">—</span>`;
+    return `<tr style="border-left:3px solid ${color};">
+      <td style="padding:8px;border-left:3px solid ${color};">${f.toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'})} · ${f.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</td>
+      <td style="padding:8px;">${tipoTexto}</td>
+      <td style="padding:8px;">${e.contactos ? e.contactos.nombre : '—'}</td>
+      <td style="padding:8px;">${e.closer ? e.closer.nombre : '—'}</td>
+      <td style="padding:8px;">${e.medico ? e.medico.nombre : '—'}</td>
+      <td style="padding:8px;">${estadoTexto}</td>
+      <td style="padding:8px;">${acciones}</td>
+    </tr>`;
+  }).join('');
+
+  // datos para el formulario
+  const soyCloser = currentUser.rol === 'closer';
+  let contactosQ = sb.from('contactos').select('id, nombre, closer_id').eq('estado','activo');
+  if(esCloserNormal) contactosQ = contactosQ.eq('closer_id', currentUser.id);
+  const { data: contactos } = await contactosQ;
+  const opcionesContactos = (contactos||[]).map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('');
+
+  const { data: closers } = await sb.from('usuarios').select('id, nombre').eq('rol','closer').eq('activo', true);
+  const opcionesClosers = (closers||[]).map(u=>`<option value="${u.id}" ${u.id===currentUser.id?'selected':''}>${u.nombre}</option>`).join('');
+
+  const { data: medicos } = await sb.from('usuarios').select('id, nombre').eq('rol','medico').eq('activo', true);
+  const opcionesMedicos = (medicos||[]).map(u=>`<option value="${u.id}" ${u.id===currentUser.id?'selected':''}>${u.nombre}</option>`).join('');
+
+  return `
+    <div class="kpi-row">
+      <div class="kpi"><div class="num">${hoy}</div><div class="label">Eventos hoy</div></div>
+      <div class="kpi c2"><div class="num">${semana}</div><div class="label">Próximos 7 días</div></div>
+      <div class="kpi c3"><div class="num">${pendientesTotal}</div><div class="label">Total programados</div></div>
+    </div>
+
+    <div class="panel">
+      <h3>Agenda</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
+          <th style="padding:8px;">Fecha</th><th style="padding:8px;">Tipo</th><th style="padding:8px;">Contacto</th>
+          <th style="padding:8px;">Closer</th><th style="padding:8px;">Médico</th><th style="padding:8px;">Estado</th><th style="padding:8px;">Acciones</th>
+        </tr></thead>
+        <tbody>${filas || '<tr><td colspan="7" style="color:var(--ink-soft);padding:14px 8px;">No hay eventos todavía.</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h3>Nuevo evento</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:600px;">
+        <div class="field" style="margin:0;"><label>Tipo de evento</label>
+          <select id="ne-tipo" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;" onchange="document.getElementById('ne-otro-wrap').style.display = this.value==='otro' ? 'block' : 'none';">
+            <option value="visita_comercial">Visita comercial</option>
+            <option value="procedimiento_medico">Procedimiento médico</option>
+            <option value="seguimiento">Seguimiento</option>
+            <option value="otro">Otro</option>
+          </select>
+        </div>
+        <div class="field" style="margin:0;"><label>Contacto (opcional)</label>
+          <select id="ne-contacto" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;">
+            <option value="">— Ninguno —</option>${opcionesContactos}
+          </select>
+        </div>
+        <div class="field" style="margin:0;"><label>Closer</label>
+          <select id="ne-closer" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;">
+            <option value="">— Ninguno —</option>${opcionesClosers}
+          </select>
+        </div>
+        <div class="field" style="margin:0;"><label>Médico</label>
+          <select id="ne-medico" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;">
+            <option value="">— Ninguno —</option>${opcionesMedicos}
+          </select>
+        </div>
+        <div class="field" style="margin:0;"><label>Fecha y hora de inicio</label><input id="ne-inicio" type="datetime-local"></div>
+        <div class="field" style="margin:0;"><label>Fecha y hora de fin (opcional)</label><input id="ne-fin" type="datetime-local"></div>
+      </div>
+      <div class="field" id="ne-otro-wrap" style="display:none;max-width:600px;">
+        <label>Describe el tipo de evento</label><input id="ne-otro-desc" placeholder="Obligatorio si el tipo es 'Otro'">
+      </div>
+      <div class="field" style="max-width:600px;"><label>Notas</label><input id="ne-notas"></div>
+      <button class="btn-primary" style="max-width:200px;margin-top:6px;" onclick="crearEvento()">Guardar evento</button>
+      <div id="ne-msg" style="margin-top:10px;font-size:13px;"></div>
+    </div>
+  `;
+}
+
+async function cambiarEstadoEvento(id, estado){
+  const { error } = await sb.from('calendario').update({ estado }).eq('id', id);
+  if(error){ alert('Error: ' + error.message); return; }
+  renderSection('calendario');
+}
+
+async function crearEvento(){
+  const tipo_evento = document.getElementById('ne-tipo').value;
+  const tipo_evento_descripcion = document.getElementById('ne-otro-desc').value.trim();
+  const contacto_id = document.getElementById('ne-contacto').value || null;
+  const closer_id = document.getElementById('ne-closer').value || null;
+  const medico_id = document.getElementById('ne-medico').value || null;
+  const inicio = document.getElementById('ne-inicio').value;
+  const fin = document.getElementById('ne-fin').value;
+  const notas = document.getElementById('ne-notas').value.trim();
+  const msg = document.getElementById('ne-msg');
+
+  if(!inicio){ msg.textContent = 'La fecha y hora de inicio es obligatoria.'; msg.style.color = 'var(--terracotta)'; return; }
+  if(tipo_evento === 'otro' && !tipo_evento_descripcion){
+    msg.textContent = 'Describe el tipo de evento cuando eliges "Otro".';
+    msg.style.color = 'var(--terracotta)';
+    return;
+  }
+
+  const payload = {
+    tipo_evento,
+    tipo_evento_descripcion: tipo_evento === 'otro' ? tipo_evento_descripcion : null,
+    contacto_id, closer_id, medico_id,
+    fecha_hora_inicio: new Date(inicio).toISOString(),
+    fecha_hora_fin: fin ? new Date(fin).toISOString() : null,
+    notas: notas || null
+  };
+  const { error } = await sb.from('calendario').insert(payload);
+  if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+
+  msg.textContent = 'Evento guardado correctamente.';
+  msg.style.color = 'var(--sage-deep)';
+  renderSection('calendario');
 }
 
 function logout(){
