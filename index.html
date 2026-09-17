@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
   :root{
     --sage:#6B8F71;
@@ -453,7 +454,7 @@ async function renderSection(key){
   const content = document.getElementById('content');
   content.innerHTML = '<div class="panel placeholder"><span class="tag">Cargando…</span></div>';
   try{
-    if(key === 'dashboard') content.innerHTML = await renderDashboard();
+    if(key === 'dashboard'){ content.innerHTML = await renderDashboard(); initDashboardCharts(); }
     else if(key === 'pipeline') content.innerHTML = await renderPipeline();
     else if(key === 'contactos') content.innerHTML = await renderContactos();
     else if(key === 'equipo') content.innerHTML = await renderEquipo();
@@ -494,6 +495,34 @@ async function renderDashboard(){
 
   const pipelineHtml = await pipelineBoardHtml();
 
+  // ---- datos para los gráficos de ventas ----
+  let ventasQ = sb.from('comisiones').select('venta_valor, fecha_venta, closer_id');
+  if(soyCloser) ventasQ = ventasQ.eq('closer_id', currentUser.id);
+  const { data: ventas } = await ventasQ;
+
+  const hoy = new Date();
+  const anioActual = hoy.getFullYear();
+  const mesesLabel = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+  const porMesAnioActual = new Array(12).fill(0);
+  const anios = new Set();
+  (ventas||[]).forEach(v=>{
+    const f = new Date(v.fecha_venta);
+    anios.add(f.getFullYear());
+    if(f.getFullYear() === anioActual) porMesAnioActual[f.getMonth()] += Number(v.venta_valor||0);
+  });
+  anios.add(anioActual);
+  const aniosOrdenados = Array.from(anios).sort().slice(-3); // hasta 3 años más recientes
+
+  const porAnio = {};
+  aniosOrdenados.forEach(a => porAnio[a] = new Array(12).fill(0));
+  (ventas||[]).forEach(v=>{
+    const f = new Date(v.fecha_venta);
+    if(porAnio[f.getFullYear()]) porAnio[f.getFullYear()][f.getMonth()] += Number(v.venta_valor||0);
+  });
+
+  window._dashboardChartData = { mesesLabel, porMesAnioActual, anioActual, porAnio, aniosOrdenados };
+
   return `
     <div class="kpi-row">
       <div class="kpi"><div class="num">${leadsActivos ?? 0}</div><div class="label">Leads activos</div></div>
@@ -501,11 +530,78 @@ async function renderDashboard(){
       <div class="kpi c3"><div class="num">${cerradosMes ?? 0}</div><div class="label">Cerrados este mes</div></div>
       <div class="kpi c4"><div class="num">${totalComisiones.toLocaleString('es-ES',{style:'currency',currency:'EUR'})}</div><div class="label">Comisiones pendientes</div></div>
     </div>
+
+    <div class="panel">
+      <h3>Ventas por mes — ${anioActual}</h3>
+      <div style="height:240px;"><canvas id="chart-mes"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <h3>Comparativa por años</h3>
+      <div style="height:240px;"><canvas id="chart-anios"></canvas></div>
+    </div>
+
     <div class="panel">
       <h3>Pipeline — vista rápida</h3>
       ${pipelineHtml}
     </div>
   `;
+}
+
+let chartMesInstance = null;
+let chartAniosInstance = null;
+
+function initDashboardCharts(){
+  const d = window._dashboardChartData;
+  if(!d || typeof Chart === 'undefined') return;
+
+  if(chartMesInstance) chartMesInstance.destroy();
+  if(chartAniosInstance) chartAniosInstance.destroy();
+
+  const ctxMes = document.getElementById('chart-mes');
+  if(ctxMes){
+    chartMesInstance = new Chart(ctxMes, {
+      type: 'bar',
+      data: {
+        labels: d.mesesLabel,
+        datasets: [{
+          label: `Ventas ${d.anioActual} (€)`,
+          data: d.porMesAnioActual,
+          backgroundColor: '#6B8F71',
+          borderRadius: 3
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { callback: v => v + '€' } } }
+      }
+    });
+  }
+
+  const ctxAnios = document.getElementById('chart-anios');
+  if(ctxAnios){
+    const colores = ['#6B8F71', '#B0776B', '#D98E4A'];
+    chartAniosInstance = new Chart(ctxAnios, {
+      type: 'line',
+      data: {
+        labels: d.mesesLabel,
+        datasets: d.aniosOrdenados.map((anio, i) => ({
+          label: String(anio),
+          data: d.porAnio[anio],
+          borderColor: colores[i % colores.length],
+          backgroundColor: colores[i % colores.length],
+          tension: 0.25,
+          pointRadius: 3
+        }))
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom' } },
+        scales: { y: { beginAtZero: true, ticks: { callback: v => v + '€' } } }
+      }
+    });
+  }
 }
 
 // ---------- PIPELINE ----------
