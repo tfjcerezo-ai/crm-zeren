@@ -351,8 +351,34 @@
           <button class="btn-primary" style="width:auto;padding:9px 16px;" onclick="reasignarContacto()" id="cm-reasignar-btn">Proponer reasignación</button>
           <div id="cm-reasignar-msg" style="margin-top:6px;font-size:13px;"></div>
         </div>
+
+        <div id="cm-clinica-wrap" style="display:none;margin-top:22px;padding-top:18px;border-top:1px solid var(--line);">
+          <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin-bottom:6px;">Notas clínicas <span style="color:var(--terracotta);">(uso médico)</span></label>
+          <textarea id="cm-clinica" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;"></textarea>
+          <button class="btn-primary" style="width:auto;padding:9px 16px;margin-top:8px;" onclick="guardarNotasClinicas()">Guardar notas clínicas</button>
+          <div id="cm-clinica-msg" style="margin-top:6px;font-size:13px;"></div>
+        </div>
       </div>
       <div style="padding:20px 22px;overflow-y:auto;">
+        <div id="cm-tratamientos-wrap" style="margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid var(--line);">
+          <h3 style="margin:0 0 12px;font-size:15px;color:var(--sage-darker);">Tratamientos</h3>
+
+          <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin-bottom:6px;">Ya realizados</label>
+          <div id="cm-tr-realizados-view" style="display:none;font-size:13.5px;color:var(--ink);padding:9px 0 12px;white-space:pre-wrap;"></div>
+          <textarea id="cm-tr-realizados-edit" rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;margin-bottom:12px;"></textarea>
+
+          <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin-bottom:6px;">Próximos</label>
+          <div id="cm-tr-proximos-view" style="display:none;font-size:13.5px;color:var(--ink);padding:9px 0 12px;white-space:pre-wrap;"></div>
+          <textarea id="cm-tr-proximos-edit" rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;margin-bottom:12px;"></textarea>
+
+          <label style="display:block;font-size:12.5px;color:var(--terracotta);font-weight:600;margin-bottom:6px;">🩺 Sugerencias del Dr.</label>
+          <div id="cm-tr-sugerencias-view" style="display:none;font-size:13.5px;color:var(--ink);padding:9px 12px;background:#FDF3F0;border-radius:3px;white-space:pre-wrap;"></div>
+          <textarea id="cm-tr-sugerencias-edit" rows="2" placeholder="Ej: valorar SmartLipo en próxima visita" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;"></textarea>
+
+          <button id="cm-tr-guardar-btn" class="btn-primary" style="width:auto;padding:9px 16px;margin-top:10px;display:none;" onclick="guardarTratamientos()">Guardar tratamientos</button>
+          <div id="cm-tr-msg" style="margin-top:6px;font-size:13px;"></div>
+        </div>
+
         <div style="margin-bottom:16px;">
           <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin-bottom:6px;">Añadir nota de seguimiento</label>
           <textarea id="cm-nota" rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:14px;"></textarea>
@@ -796,7 +822,7 @@ async function confirmMoverLead(){
 // ---------- CONTACTOS ----------
 async function renderContactos(){
   const soyCloser = currentUser.rol === 'closer' && !ve_todo(currentUser);
-  let q = sb.from('contactos').select('id, nombre, telefono, email, origen, tratamiento_interes, estado, closer_id, usuarios(nombre)').order('creado_en', {ascending:false});
+  let q = sb.from('contactos').select('id, nombre, telefono, email, origen, tratamiento_interes, estado, closer_id, sugerencias_medico, usuarios(nombre)').order('creado_en', {ascending:false});
   if(soyCloser) q = q.eq('closer_id', currentUser.id);
   const { data, error } = await q;
   if(error) throw error;
@@ -887,7 +913,7 @@ function buildContactosRows(data, ultimosPorContacto){
     const u = ultimosPorContacto[c.id];
     return `
     <tr>
-      <td><button onclick="openContactoDetail('${c.id}')" style="background:none;border:none;padding:0;color:var(--sage-deep);font-weight:600;font-family:inherit;font-size:13.5px;cursor:pointer;text-align:left;">${c.nombre}</button></td>
+      <td><button onclick="openContactoDetail('${c.id}')" style="background:none;border:none;padding:0;color:var(--sage-deep);font-weight:600;font-family:inherit;font-size:13.5px;cursor:pointer;text-align:left;">${c.nombre}</button>${c.sugerencias_medico ? ' <span title="Hay sugerencia del médico" style="font-size:11px;">🩺</span>' : ''}</td>
       <td>${c.telefono || '—'}</td>
       <td>${c.tratamiento_interes || '—'}</td>
       <td>${c.usuarios ? c.usuarios.nombre : '—'}</td>
@@ -1000,8 +1026,76 @@ async function openContactoDetail(contactoId){
   document.getElementById('cm-nota-msg').textContent = '';
 
   await prepararBloqueReasignacion(c.closer_id);
+  await prepararBloqueClinico(c.id, c.notas_clinicas);
+  prepararBloqueTratamientos(c);
   await cargarTimelineContacto(contactoId);
   document.getElementById('contact-modal').style.display = 'flex';
+}
+
+function prepararBloqueTratamientos(c){
+  const puedeEditar = currentUser.rol === 'admin' || currentUser.rol === 'medico';
+  document.getElementById('cm-tr-msg').textContent = '';
+
+  const campos = [
+    { view: 'cm-tr-realizados-view', edit: 'cm-tr-realizados-edit', valor: c.tratamientos_realizados },
+    { view: 'cm-tr-proximos-view', edit: 'cm-tr-proximos-edit', valor: c.proximos_tratamientos },
+    { view: 'cm-tr-sugerencias-view', edit: 'cm-tr-sugerencias-edit', valor: c.sugerencias_medico }
+  ];
+
+  campos.forEach(({view, edit, valor}) => {
+    if(puedeEditar){
+      document.getElementById(view).style.display = 'none';
+      document.getElementById(edit).style.display = 'block';
+      document.getElementById(edit).value = valor || '';
+    } else {
+      document.getElementById(edit).style.display = 'none';
+      const v = document.getElementById(view);
+      v.style.display = 'block';
+      v.textContent = valor || 'Sin información todavía.';
+    }
+  });
+
+  document.getElementById('cm-tr-guardar-btn').style.display = puedeEditar ? 'inline-block' : 'none';
+}
+
+async function guardarTratamientos(){
+  const msg = document.getElementById('cm-tr-msg');
+  const payload = {
+    tratamientos_realizados: document.getElementById('cm-tr-realizados-edit').value.trim() || null,
+    proximos_tratamientos: document.getElementById('cm-tr-proximos-edit').value.trim() || null,
+    sugerencias_medico: document.getElementById('cm-tr-sugerencias-edit').value.trim() || null
+  };
+  const { error } = await sb.from('contactos').update(payload).eq('id', contactoActual.id);
+  if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+  msg.textContent = 'Guardado correctamente.';
+  msg.style.color = 'var(--sage-deep)';
+}
+
+async function prepararBloqueClinico(contactoId, notasActuales){
+  const wrap = document.getElementById('cm-clinica-wrap');
+  document.getElementById('cm-clinica-msg').textContent = '';
+  const esAdmin = currentUser.rol === 'admin';
+  const esMedicoGerente = currentUser.rol === 'medico' && currentUser.es_gerente;
+  const esMedicoNormal = currentUser.rol === 'medico' && !currentUser.es_gerente;
+
+  let puedeVer = esAdmin || esMedicoGerente;
+  if(esMedicoNormal){
+    const { data } = await sb.from('calendario').select('id').eq('contacto_id', contactoId).eq('medico_id', currentUser.id).limit(1);
+    puedeVer = !!(data && data.length);
+  }
+
+  if(!puedeVer){ wrap.style.display = 'none'; return; }
+  document.getElementById('cm-clinica').value = notasActuales || '';
+  wrap.style.display = 'block';
+}
+
+async function guardarNotasClinicas(){
+  const texto = document.getElementById('cm-clinica').value;
+  const msg = document.getElementById('cm-clinica-msg');
+  const { error } = await sb.from('contactos').update({ notas_clinicas: texto || null }).eq('id', contactoActual.id);
+  if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+  msg.textContent = 'Notas clínicas guardadas.';
+  msg.style.color = 'var(--sage-deep)';
 }
 
 async function prepararBloqueReasignacion(closerActualId){
