@@ -343,6 +343,14 @@
         </div>
         <button class="btn-primary" onclick="guardarFichaContacto()">Guardar cambios</button>
         <div id="cm-f-msg" style="margin-top:8px;font-size:13px;"></div>
+
+        <div id="cm-reasignar-wrap" style="display:none;margin-top:22px;padding-top:18px;border-top:1px solid var(--line);">
+          <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin-bottom:6px;" id="cm-reasignar-label">Reasignar a otro closer</label>
+          <select id="cm-reasignar-closer" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;margin-bottom:8px;"></select>
+          <input id="cm-reasignar-motivo" placeholder="Motivo (opcional)" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;margin-bottom:8px;">
+          <button class="btn-primary" style="width:auto;padding:9px 16px;" onclick="reasignarContacto()" id="cm-reasignar-btn">Proponer reasignación</button>
+          <div id="cm-reasignar-msg" style="margin-top:6px;font-size:13px;"></div>
+        </div>
       </div>
       <div style="padding:20px 22px;overflow-y:auto;">
         <div style="margin-bottom:16px;">
@@ -540,6 +548,8 @@ async function renderDashboard(){
 
   window._dashboardChartData = { mesesLabel, porMesAnioActual, anioActual, porAnio, aniosOrdenados };
 
+  const solicitudesHtml = currentUser.rol === 'admin' ? await renderSolicitudesPendientes() : '';
+
   return `
     <div class="kpi-row">
       <div class="kpi"><div class="num">${leadsActivos ?? 0}</div><div class="label">Leads activos</div></div>
@@ -547,6 +557,8 @@ async function renderDashboard(){
       <div class="kpi c3"><div class="num">${cerradosMes ?? 0}</div><div class="label">Cerrados este mes</div></div>
       <div class="kpi c4"><div class="num">${totalComisiones.toLocaleString('es-ES',{style:'currency',currency:'EUR'})}</div><div class="label">Comisiones pendientes</div></div>
     </div>
+
+    ${solicitudesHtml}
 
     <div class="panel">
       <h3>Ventas por mes — ${anioActual}</h3>
@@ -563,6 +575,51 @@ async function renderDashboard(){
       ${pipelineHtml}
     </div>
   `;
+}
+
+async function renderSolicitudesPendientes(){
+  const { data, error } = await sb.from('solicitudes_reasignacion')
+    .select('id, motivo, fecha_solicitud, contactos(nombre), origen:usuarios!solicitudes_reasignacion_closer_origen_id_fkey(nombre), destino:usuarios!solicitudes_reasignacion_closer_destino_id_fkey(nombre), propuesto:usuarios!solicitudes_reasignacion_propuesto_por_fkey(nombre)')
+    .eq('estado', 'pendiente')
+    .order('fecha_solicitud', {ascending:false});
+  if(error || !data || data.length === 0) return '';
+
+  const filas = data.map(s => `
+    <div style="border-left:3px solid var(--amber);padding:10px 14px;background:#FDF8EF;border-radius:0 3px 3px 0;margin-bottom:8px;">
+      <div style="font-size:13.5px;"><strong>${s.contactos ? s.contactos.nombre : '—'}</strong>: ${s.origen ? s.origen.nombre : '—'} → ${s.destino ? s.destino.nombre : '—'}</div>
+      ${s.motivo ? `<div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px;">${s.motivo}</div>` : ''}
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-top:4px;">Propuesto por ${s.propuesto ? s.propuesto.nombre : '—'} · ${new Date(s.fecha_solicitud).toLocaleString('es-ES')}</div>
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <button onclick="resolverSolicitud('${s.id}','aprobado')" style="font-size:12px;padding:5px 12px;border:1px solid var(--sage-deep);color:var(--sage-deep);border-radius:3px;background:#fff;cursor:pointer;">Aprobar</button>
+        <button onclick="resolverSolicitud('${s.id}','rechazado')" style="font-size:12px;padding:5px 12px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;">Rechazar</button>
+      </div>
+    </div>`).join('');
+
+  return `<div class="panel">
+    <h3>Solicitudes de reasignación pendientes (${data.length})</h3>
+    ${filas}
+  </div>`;
+}
+
+async function resolverSolicitud(id, decision){
+  const { data: sol, error: e0 } = await sb.from('solicitudes_reasignacion').select('*').eq('id', id).maybeSingle();
+  if(e0 || !sol){ alert('No se pudo cargar la solicitud.'); return; }
+
+  const { error: e1 } = await sb.from('solicitudes_reasignacion').update({
+    estado: decision, resuelto_por: currentUser.id, fecha_resolucion: new Date().toISOString()
+  }).eq('id', id);
+  if(e1){ alert('Error: ' + e1.message); return; }
+
+  if(decision === 'aprobado'){
+    await sb.from('contactos').update({ closer_id: sol.closer_destino_id }).eq('id', sol.contacto_id);
+    const { data: pl } = await sb.from('pipeline').select('etapa').eq('contacto_id', sol.contacto_id).maybeSingle();
+    const etapa = pl ? pl.etapa : 'contacto_nuevo';
+    await sb.from('pipeline_historial').insert({
+      contacto_id: sol.contacto_id, etapa_anterior: etapa, etapa_nueva: etapa,
+      comentario: 'Reasignación aprobada por Javier' + (sol.motivo ? ': ' + sol.motivo : ''), usuario_id: currentUser.id
+    });
+  }
+  renderSection('dashboard');
 }
 
 let chartMesInstance = null;
@@ -928,7 +985,7 @@ async function openContactoDetail(contactoId){
   if(error || !c){ alert('No se pudo cargar el contacto.'); return; }
 
   const { data: pl } = await sb.from('pipeline').select('etapa').eq('contacto_id', contactoId).maybeSingle();
-  contactoActual = { id: contactoId, etapaActual: pl ? pl.etapa : 'contacto_nuevo' };
+  contactoActual = { id: contactoId, etapaActual: pl ? pl.etapa : 'contacto_nuevo', closerActualId: c.closer_id };
 
   document.getElementById('cm-nombre').textContent = c.nombre;
   document.getElementById('cm-sub').textContent = STAGES.find(s=>s[0]===contactoActual.etapaActual)?.[1] || contactoActual.etapaActual;
@@ -942,8 +999,60 @@ async function openContactoDetail(contactoId){
   document.getElementById('cm-nota').value = '';
   document.getElementById('cm-nota-msg').textContent = '';
 
+  await prepararBloqueReasignacion(c.closer_id);
   await cargarTimelineContacto(contactoId);
   document.getElementById('contact-modal').style.display = 'flex';
+}
+
+async function prepararBloqueReasignacion(closerActualId){
+  const esAdmin = currentUser.rol === 'admin';
+  const esCoordinador = currentUser.rol === 'closer' && currentUser.es_coordinador;
+  const wrap = document.getElementById('cm-reasignar-wrap');
+  document.getElementById('cm-reasignar-msg').textContent = '';
+  document.getElementById('cm-reasignar-motivo').value = '';
+
+  if(!esAdmin && !esCoordinador){ wrap.style.display = 'none'; return; }
+
+  const { data: closers } = await sb.from('usuarios').select('id, nombre').eq('rol','closer').eq('activo', true);
+  const opciones = (closers||[]).filter(u=>u.id !== closerActualId).map(u=>`<option value="${u.id}">${u.nombre}</option>`).join('');
+  document.getElementById('cm-reasignar-closer').innerHTML = `<option value="">— Selecciona —</option>${opciones}`;
+
+  document.getElementById('cm-reasignar-label').textContent = esAdmin ? 'Reasignar a otro closer' : 'Proponer reasignación a otro closer';
+  document.getElementById('cm-reasignar-btn').textContent = esAdmin ? 'Reasignar ahora' : 'Proponer reasignación';
+  wrap.style.display = 'block';
+}
+
+async function reasignarContacto(){
+  const destinoId = document.getElementById('cm-reasignar-closer').value;
+  const motivo = document.getElementById('cm-reasignar-motivo').value.trim();
+  const msg = document.getElementById('cm-reasignar-msg');
+  if(!destinoId){ msg.textContent = 'Elige el closer destino.'; msg.style.color = 'var(--terracotta)'; return; }
+
+  const esAdmin = currentUser.rol === 'admin';
+
+  if(esAdmin){
+    const { error: e1 } = await sb.from('contactos').update({ closer_id: destinoId }).eq('id', contactoActual.id);
+    if(e1){ msg.textContent = 'Error: ' + e1.message; msg.style.color = 'var(--terracotta)'; return; }
+    await sb.from('pipeline_historial').insert({
+      contacto_id: contactoActual.id, etapa_anterior: contactoActual.etapaActual, etapa_nueva: contactoActual.etapaActual,
+      comentario: 'Reasignado a otro closer' + (motivo ? ': ' + motivo : ''), usuario_id: currentUser.id
+    });
+    msg.textContent = 'Contacto reasignado.';
+    msg.style.color = 'var(--sage-deep)';
+    renderSection('contactos');
+  } else {
+    const { error } = await sb.from('solicitudes_reasignacion').insert({
+      contacto_id: contactoActual.id,
+      closer_origen_id: contactoActual.closerActualId,
+      closer_destino_id: destinoId,
+      propuesto_por: currentUser.id,
+      motivo: motivo || null,
+      estado: 'pendiente'
+    });
+    if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+    msg.textContent = 'Solicitud enviada. Queda pendiente de aprobación de Javier.';
+    msg.style.color = 'var(--sage-deep)';
+  }
 }
 
 async function cargarTimelineContacto(contactoId){
