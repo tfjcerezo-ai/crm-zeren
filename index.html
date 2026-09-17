@@ -316,6 +316,47 @@
   </div>
 </div>
 
+<!-- ================= MODAL FICHA DE CONTACTO ================= -->
+<div id="contact-modal" style="display:none;position:fixed;inset:0;background:rgba(43,46,42,.45);z-index:50;align-items:center;justify-content:center;padding:24px;">
+  <div style="background:#fff;border-radius:4px;padding:0;width:min(880px,95vw);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;">
+    <div style="padding:20px 26px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <h3 style="margin:0;font-family:'Fraunces';font-size:19px;color:var(--sage-darker);" id="cm-nombre">—</h3>
+        <div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px;" id="cm-sub">—</div>
+      </div>
+      <button onclick="closeContactModal()" style="border:none;background:none;font-size:22px;color:var(--ink-soft);cursor:pointer;line-height:1;">×</button>
+    </div>
+    <div style="display:grid;grid-template-columns:340px 1fr;flex:1;overflow:hidden;">
+      <div style="padding:20px 22px;border-right:1px solid var(--line);overflow-y:auto;">
+        <div class="field"><label>Nombre</label><input id="cm-f-nombre"></div>
+        <div class="field"><label>Teléfono</label><input id="cm-f-telefono"></div>
+        <div class="field"><label>Email</label><input id="cm-f-email"></div>
+        <div class="field"><label>Origen</label><input id="cm-f-origen"></div>
+        <div class="field"><label>Tratamiento de interés</label><input id="cm-f-tratamiento"></div>
+        <div class="field"><label>Estado del contacto</label>
+          <select id="cm-f-estado" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;">
+            <option value="activo">Activo</option>
+            <option value="cerrado">Cerrado</option>
+            <option value="perdido">Perdido</option>
+          </select>
+        </div>
+        <button class="btn-primary" onclick="guardarFichaContacto()">Guardar cambios</button>
+        <div id="cm-f-msg" style="margin-top:8px;font-size:13px;"></div>
+      </div>
+      <div style="padding:20px 22px;overflow-y:auto;">
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin-bottom:6px;">Añadir nota de seguimiento</label>
+          <textarea id="cm-nota" rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:14px;"></textarea>
+          <button class="btn-primary" style="width:auto;padding:9px 18px;margin-top:8px;" onclick="guardarNotaContacto()">Guardar nota</button>
+          <div id="cm-nota-msg" style="margin-top:6px;font-size:13px;"></div>
+        </div>
+        <h3 style="margin:0 0 10px;font-size:15px;color:var(--sage-darker);">Historial de actividad</h3>
+        <div id="cm-timeline" style="display:flex;flex-direction:column;gap:10px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const SUPABASE_URL = 'https://rlffvquhwaeduinnzuwk.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Md-7y2DpPlvkrAQ5nQhE_Q_tL9jAhlh';
@@ -592,15 +633,39 @@ async function renderContactos(){
 
   window._contactosCache = data || [];
 
-  let rows = (data||[]).map(c => `
+  const ids = (data||[]).map(c=>c.id);
+  let ultimosPorContacto = {};
+  if(ids.length){
+    const { data: hist } = await sb.from('pipeline_historial')
+      .select('contacto_id, comentario, fecha_cambio')
+      .in('contacto_id', ids)
+      .order('fecha_cambio', {ascending:false});
+    (hist||[]).forEach(h=>{
+      if(!ultimosPorContacto[h.contacto_id]) ultimosPorContacto[h.contacto_id] = h;
+    });
+  }
+
+  const fRel = (iso)=>{
+    const d = new Date(iso);
+    return d.toLocaleDateString('es-ES',{day:'numeric',month:'short'}) + ' · ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+  };
+
+  let rows = (data||[]).map(c => {
+    const u = ultimosPorContacto[c.id];
+    const nombreEsc = c.nombre.replace(/'/g,"\\'");
+    return `
     <tr>
-      <td>${c.nombre}</td>
+      <td><button onclick="openContactoDetail('${c.id}')" style="background:none;border:none;padding:0;color:var(--sage-deep);font-weight:600;font-family:inherit;font-size:13.5px;cursor:pointer;text-align:left;">${c.nombre}</button></td>
       <td>${c.telefono || '—'}</td>
       <td>${c.tratamiento_interes || '—'}</td>
       <td>${c.usuarios ? c.usuarios.nombre : '—'}</td>
       <td>${c.estado}</td>
-    </tr>`).join('');
-  if(!rows) rows = `<tr><td colspan="5" style="color:var(--ink-soft);padding:14px 0;">Todavía no hay contactos. Añade el primero abajo, o importa un CSV.</td></tr>`;
+      <td style="max-width:220px;">
+        ${u ? `<div style="font-size:12.5px;color:var(--ink);">${u.comentario.length>60?u.comentario.slice(0,60)+'…':u.comentario}</div><div style="font-size:11px;color:var(--ink-soft);margin-top:2px;">${fRel(u.fecha_cambio)}</div>` : '<span style="color:var(--ink-soft);font-size:12.5px;">Sin actividad</span>'}
+      </td>
+    </tr>`;
+  }).join('');
+  if(!rows) rows = `<tr><td colspan="6" style="color:var(--ink-soft);padding:14px 0;">Todavía no hay contactos. Añade el primero abajo, o importa un CSV.</td></tr>`;
 
   return `
     <div class="panel">
@@ -619,6 +684,7 @@ async function renderContactos(){
           <tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
             <th style="padding:6px 8px;">Nombre</th><th style="padding:6px 8px;">Teléfono</th>
             <th style="padding:6px 8px;">Tratamiento</th><th style="padding:6px 8px;">Closer</th><th style="padding:6px 8px;">Estado</th>
+            <th style="padding:6px 8px;">Último contacto</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -701,6 +767,100 @@ function importContactosCSV(event){
   });
 }
 
+// ---------- FICHA DE CONTACTO ----------
+let contactoActual = null; // { id, etapaActual }
+
+async function openContactoDetail(contactoId){
+  const { data: c, error } = await sb.from('contactos').select('*').eq('id', contactoId).maybeSingle();
+  if(error || !c){ alert('No se pudo cargar el contacto.'); return; }
+
+  const { data: pl } = await sb.from('pipeline').select('etapa').eq('contacto_id', contactoId).maybeSingle();
+  contactoActual = { id: contactoId, etapaActual: pl ? pl.etapa : 'contacto_nuevo' };
+
+  document.getElementById('cm-nombre').textContent = c.nombre;
+  document.getElementById('cm-sub').textContent = STAGES.find(s=>s[0]===contactoActual.etapaActual)?.[1] || contactoActual.etapaActual;
+  document.getElementById('cm-f-nombre').value = c.nombre || '';
+  document.getElementById('cm-f-telefono').value = c.telefono || '';
+  document.getElementById('cm-f-email').value = c.email || '';
+  document.getElementById('cm-f-origen').value = c.origen || '';
+  document.getElementById('cm-f-tratamiento').value = c.tratamiento_interes || '';
+  document.getElementById('cm-f-estado').value = c.estado || 'activo';
+  document.getElementById('cm-f-msg').textContent = '';
+  document.getElementById('cm-nota').value = '';
+  document.getElementById('cm-nota-msg').textContent = '';
+
+  await cargarTimelineContacto(contactoId);
+  document.getElementById('contact-modal').style.display = 'flex';
+}
+
+async function cargarTimelineContacto(contactoId){
+  const { data: hist } = await sb.from('pipeline_historial')
+    .select('etapa_anterior, etapa_nueva, comentario, fecha_cambio, usuarios(nombre)')
+    .eq('contacto_id', contactoId)
+    .order('fecha_cambio', {ascending:false});
+
+  const box = document.getElementById('cm-timeline');
+  if(!hist || hist.length === 0){
+    box.innerHTML = '<div style="color:var(--ink-soft);font-size:13.5px;">Sin actividad registrada todavía.</div>';
+    return;
+  }
+  box.innerHTML = hist.map(h=>{
+    const mismaEtapa = h.etapa_anterior === h.etapa_nueva;
+    const etiqueta = mismaEtapa
+      ? `Nota — ${STAGES.find(s=>s[0]===h.etapa_nueva)?.[1] || h.etapa_nueva}`
+      : `${h.etapa_anterior ? (STAGES.find(s=>s[0]===h.etapa_anterior)?.[1]||h.etapa_anterior)+' → ' : 'Alta — '}${STAGES.find(s=>s[0]===h.etapa_nueva)?.[1] || h.etapa_nueva}`;
+    return `<div style="border-left:2px solid var(--line);padding-left:12px;">
+      <div style="font-size:12px;color:var(--sage-deep);font-weight:600;">${etiqueta}</div>
+      <div style="font-size:13.5px;color:var(--ink);margin:2px 0;">${h.comentario}</div>
+      <div style="font-size:11.5px;color:var(--ink-soft);">${h.usuarios ? h.usuarios.nombre : '—'} · ${new Date(h.fecha_cambio).toLocaleString('es-ES')}</div>
+    </div>`;
+  }).join('');
+}
+
+function closeContactModal(){
+  document.getElementById('contact-modal').style.display = 'none';
+  contactoActual = null;
+}
+
+async function guardarFichaContacto(){
+  const msg = document.getElementById('cm-f-msg');
+  const payload = {
+    nombre: document.getElementById('cm-f-nombre').value.trim(),
+    telefono: document.getElementById('cm-f-telefono').value.trim() || null,
+    email: document.getElementById('cm-f-email').value.trim() || null,
+    origen: document.getElementById('cm-f-origen').value.trim() || null,
+    tratamiento_interes: document.getElementById('cm-f-tratamiento').value.trim() || null,
+    estado: document.getElementById('cm-f-estado').value,
+    actualizado_en: new Date().toISOString()
+  };
+  const { error } = await sb.from('contactos').update(payload).eq('id', contactoActual.id);
+  if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+  msg.textContent = 'Guardado.';
+  msg.style.color = 'var(--sage-deep)';
+  document.getElementById('cm-nombre').textContent = payload.nombre;
+  renderSection('contactos');
+}
+
+async function guardarNotaContacto(){
+  const texto = document.getElementById('cm-nota').value.trim();
+  const msg = document.getElementById('cm-nota-msg');
+  if(!texto){ msg.textContent = 'Escribe algo antes de guardar.'; msg.style.color = 'var(--terracotta)'; return; }
+
+  const { error } = await sb.from('pipeline_historial').insert({
+    contacto_id: contactoActual.id,
+    etapa_anterior: contactoActual.etapaActual,
+    etapa_nueva: contactoActual.etapaActual,
+    comentario: texto,
+    usuario_id: currentUser.id
+  });
+  if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+
+  document.getElementById('cm-nota').value = '';
+  msg.textContent = 'Nota guardada.';
+  msg.style.color = 'var(--sage-deep)';
+  await cargarTimelineContacto(contactoActual.id);
+}
+
 async function crearContacto(){
   const nombre = document.getElementById('nc-nombre').value.trim();
   const telefono = document.getElementById('nc-telefono').value.trim();
@@ -746,26 +906,54 @@ async function renderEquipo(){
   if(eqErr) throw eqErr;
 
   const { data: comisiones, error: comErr } = await sb.from('comisiones')
-    .select('id, venta_valor, pct_closer, pct_cdv, monto_closer, monto_cdv, fecha_venta, estado_pago, contactos(nombre), usuarios(nombre)')
+    .select('id, closer_id, venta_valor, pct_closer, pct_cdv, monto_closer, monto_cdv, fecha_venta, estado_pago, contactos(nombre), usuarios(nombre)')
     .order('fecha_venta', {ascending:false});
   if(comErr) throw comErr;
 
   const inicioMes = new Date(); inicioMes.setDate(1); inicioMes.setHours(0,0,0,0);
+  const comisionesMes = (comisiones||[]).filter(c=> new Date(c.fecha_venta) >= inicioMes);
   const pendiente = (comisiones||[]).filter(c=>c.estado_pago==='pendiente').reduce((s,c)=>s+Number(c.monto_cdv||0),0);
   const pagadoMes = (comisiones||[]).filter(c=>c.estado_pago==='pagado' && new Date(c.fecha_venta) >= inicioMes).reduce((s,c)=>s+Number(c.monto_cdv||0),0);
-  const nVentasMes = (comisiones||[]).filter(c=>new Date(c.fecha_venta) >= inicioMes).length;
+  const nVentasMes = comisionesMes.length;
 
   const eur = n => Number(n||0).toLocaleString('es-ES',{style:'currency',currency:'EUR'});
+
+  // agregados por closer para el mes en curso
+  const ventasPorCloser = {};
+  const comisionPorCloser = {};
+  comisionesMes.forEach(c=>{
+    ventasPorCloser[c.closer_id] = (ventasPorCloser[c.closer_id]||0) + Number(c.venta_valor||0);
+    comisionPorCloser[c.closer_id] = (comisionPorCloser[c.closer_id]||0) + Number(c.monto_closer||0);
+  });
+  const ventasEquipoTotal = comisionesMes.reduce((s,c)=>s+Number(c.venta_valor||0),0);
+  const comisionCdvTotal = comisionesMes.reduce((s,c)=>s+Number(c.monto_cdv||0),0);
 
   const filasEquipo = (equipo||[]).map(u=>{
     const etiqueta = u.rol === 'admin' ? 'Admin'
       : u.rol === 'medico' ? (u.es_gerente ? 'Médico · Gerente' : 'Médico')
       : (u.es_coordinador ? 'Closer · Coordinador/a' : 'Closer');
     const pct = u.comision_pct != null ? u.comision_pct : (u.rol==='closer' ? pctCloserDefault : null);
+
+    let vendidoTxt = '—', comisionTxt = '—';
+    if(u.rol === 'admin'){
+      vendidoTxt = eur(ventasEquipoTotal) + ' (equipo)';
+      comisionTxt = eur(comisionCdvTotal);
+    } else if(u.rol === 'closer'){
+      vendidoTxt = eur(ventasPorCloser[u.id] || 0);
+      comisionTxt = eur(comisionPorCloser[u.id] || 0);
+    }
+
+    const estadoCell = u.rol === 'admin'
+      ? (u.activo ? 'Activo' : 'Inactivo')
+      : `${u.activo ? 'Activo' : 'Inactivo'}
+         <button onclick="toggleActivoUsuario('${u.id}', ${!u.activo})" style="margin-left:8px;font-size:11.5px;padding:3px 8px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;">${u.activo ? 'Desactivar' : 'Activar'}</button>`;
+
     return `<tr>
       <td>${u.nombre}</td><td>${etiqueta}</td>
       <td>${pct != null ? pct+'%' : '—'}</td>
-      <td>${u.activo ? 'Activo' : 'Inactivo'}</td>
+      <td>${vendidoTxt}</td>
+      <td>${comisionTxt}</td>
+      <td>${estadoCell}</td>
     </tr>`;
   }).join('');
 
@@ -803,9 +991,12 @@ async function renderEquipo(){
       <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
         <thead><tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
           <th style="padding:6px 8px;">Nombre</th><th style="padding:6px 8px;">Rol</th>
-          <th style="padding:6px 8px;">% Comisión</th><th style="padding:6px 8px;">Estado</th>
+          <th style="padding:6px 8px;">% Comisión</th>
+          <th style="padding:6px 8px;">Vendido este mes</th>
+          <th style="padding:6px 8px;">Comisión a pagar</th>
+          <th style="padding:6px 8px;">Estado</th>
         </tr></thead>
-        <tbody>${filasEquipo || '<tr><td colspan="4">Sin usuarios.</td></tr>'}</tbody>
+        <tbody>${filasEquipo || '<tr><td colspan="6">Sin usuarios.</td></tr>'}</tbody>
       </table>
     </div>
 
@@ -842,6 +1033,12 @@ async function renderEquipo(){
       <div id="nv-msg" style="margin-top:10px;font-size:13px;"></div>
     </div>
   `;
+}
+
+async function toggleActivoUsuario(id, nuevoEstado){
+  const { error } = await sb.from('usuarios').update({ activo: nuevoEstado }).eq('id', id);
+  if(error){ alert('Error: ' + error.message); return; }
+  renderSection('equipo');
 }
 
 async function marcarPagado(id){
