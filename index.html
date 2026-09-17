@@ -757,28 +757,30 @@ async function renderContactos(){
       if(!ultimosPorContacto[h.contacto_id]) ultimosPorContacto[h.contacto_id] = h;
     });
   }
+  window._ultimosPorContacto = ultimosPorContacto;
 
-  const fRel = (iso)=>{
-    const d = new Date(iso);
-    return d.toLocaleDateString('es-ES',{day:'numeric',month:'short'}) + ' · ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
-  };
+  // lista de closers para el filtro (solo si el usuario ve más de un closer)
+  let opcionesFiltroCloser = '';
+  if(!soyCloser){
+    const closersUnicos = new Map();
+    (data||[]).forEach(c=>{ if(c.usuarios && c.closer_id) closersUnicos.set(c.closer_id, c.usuarios.nombre); });
+    opcionesFiltroCloser = Array.from(closersUnicos.entries()).map(([id,nombre])=>`<option value="${id}">${nombre}</option>`).join('');
+  }
 
-  let rows = (data||[]).map(c => {
-    const u = ultimosPorContacto[c.id];
-    const nombreEsc = c.nombre.replace(/'/g,"\\'");
-    return `
-    <tr>
-      <td><button onclick="openContactoDetail('${c.id}')" style="background:none;border:none;padding:0;color:var(--sage-deep);font-weight:600;font-family:inherit;font-size:13.5px;cursor:pointer;text-align:left;">${c.nombre}</button></td>
-      <td>${c.telefono || '—'}</td>
-      <td>${c.tratamiento_interes || '—'}</td>
-      <td>${c.usuarios ? c.usuarios.nombre : '—'}</td>
-      <td>${c.estado}</td>
-      <td style="max-width:220px;">
-        ${u ? `<div style="font-size:12.5px;color:var(--ink);">${u.comentario.length>60?u.comentario.slice(0,60)+'…':u.comentario}</div><div style="font-size:11px;color:var(--ink-soft);margin-top:2px;">${fRel(u.fecha_cambio)}</div>` : '<span style="color:var(--ink-soft);font-size:12.5px;">Sin actividad</span>'}
-      </td>
-    </tr>`;
-  }).join('');
-  if(!rows) rows = `<tr><td colspan="6" style="color:var(--ink-soft);padding:14px 0;">Todavía no hay contactos. Añade el primero abajo, o importa un CSV.</td></tr>`;
+  const filtrosHtml = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      <input id="ct-buscar" placeholder="Buscar por nombre o teléfono…" oninput="filterContactosTable()"
+        style="flex:1;min-width:200px;padding:9px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;">
+      ${!soyCloser ? `<select id="ct-filtro-closer" onchange="filterContactosTable()" style="padding:9px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;">
+        <option value="">Todos los closers</option>${opcionesFiltroCloser}
+      </select>` : ''}
+      <select id="ct-filtro-estado" onchange="filterContactosTable()" style="padding:9px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;">
+        <option value="">Todos los estados</option>
+        <option value="activo">Activo</option>
+        <option value="cerrado">Cerrado</option>
+        <option value="perdido">Perdido</option>
+      </select>
+    </div>`;
 
   return `
     <div class="panel">
@@ -792,6 +794,7 @@ async function renderContactos(){
           </label>
         </div>
       </div>
+      ${filtrosHtml}
       <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
         <thead>
           <tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
@@ -800,7 +803,7 @@ async function renderContactos(){
             <th style="padding:6px 8px;">Último contacto</th>
           </tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody id="ct-tbody">${buildContactosRows(window._contactosCache, ultimosPorContacto)}</tbody>
       </table>
       <div id="ci-msg" style="margin-top:10px;font-size:13px;"></div>
     </div>
@@ -816,6 +819,43 @@ async function renderContactos(){
       <div id="nc-msg" style="margin-top:10px;font-size:13px;"></div>
     </div>
   `;
+}
+
+function buildContactosRows(data, ultimosPorContacto){
+  const fRel = (iso)=>{
+    const d = new Date(iso);
+    return d.toLocaleDateString('es-ES',{day:'numeric',month:'short'}) + ' · ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+  };
+  let rows = (data||[]).map(c => {
+    const u = ultimosPorContacto[c.id];
+    return `
+    <tr>
+      <td><button onclick="openContactoDetail('${c.id}')" style="background:none;border:none;padding:0;color:var(--sage-deep);font-weight:600;font-family:inherit;font-size:13.5px;cursor:pointer;text-align:left;">${c.nombre}</button></td>
+      <td>${c.telefono || '—'}</td>
+      <td>${c.tratamiento_interes || '—'}</td>
+      <td>${c.usuarios ? c.usuarios.nombre : '—'}</td>
+      <td>${c.estado}</td>
+      <td style="max-width:220px;">
+        ${u ? `<div style="font-size:12.5px;color:var(--ink);">${u.comentario.length>60?u.comentario.slice(0,60)+'…':u.comentario}</div><div style="font-size:11px;color:var(--ink-soft);margin-top:2px;">${fRel(u.fecha_cambio)}</div>` : '<span style="color:var(--ink-soft);font-size:12.5px;">Sin actividad</span>'}
+      </td>
+    </tr>`;
+  }).join('');
+  if(!rows) rows = `<tr><td colspan="6" style="color:var(--ink-soft);padding:14px 0;">No hay contactos que coincidan con la búsqueda.</td></tr>`;
+  return rows;
+}
+
+function filterContactosTable(){
+  const texto = (document.getElementById('ct-buscar')?.value || '').trim().toLowerCase();
+  const closerSel = document.getElementById('ct-filtro-closer')?.value || '';
+  const estadoSel = document.getElementById('ct-filtro-estado')?.value || '';
+
+  const filtrado = (window._contactosCache || []).filter(c => {
+    if(texto && !((c.nombre||'').toLowerCase().includes(texto) || (c.telefono||'').toLowerCase().includes(texto))) return false;
+    if(closerSel && c.closer_id !== closerSel) return false;
+    if(estadoSel && c.estado !== estadoSel) return false;
+    return true;
+  });
+  document.getElementById('ct-tbody').innerHTML = buildContactosRows(filtrado, window._ultimosPorContacto || {});
 }
 
 function exportContactosCSV(){
