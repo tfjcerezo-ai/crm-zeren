@@ -459,6 +459,7 @@ async function renderSection(key){
     else if(key === 'contactos') content.innerHTML = await renderContactos();
     else if(key === 'equipo') content.innerHTML = await renderEquipo();
     else if(key === 'calendario') content.innerHTML = await renderCalendario();
+    else if(key === 'config') content.innerHTML = await renderConfig();
     else content.innerHTML = placeholder(key);
   }catch(e){
     content.innerHTML = `<div class="panel placeholder"><span class="tag">Error</span><div>${e.message}</div></div>`;
@@ -1336,6 +1337,96 @@ async function crearEvento(){
   msg.textContent = 'Evento guardado correctamente.';
   msg.style.color = 'var(--sage-deep)';
   renderSection('calendario');
+}
+
+// ---------- CONFIGURACIÓN ----------
+async function renderConfig(){
+  const pctCloser = await getConfig('comision_closer_default', 15);
+  const pctCdv = await getConfig('comision_cdv_default', 15);
+
+  return `
+    <div class="panel">
+      <h3>Comisiones por defecto</h3>
+      <p style="font-size:13px;color:var(--ink-soft);margin-top:-8px;margin-bottom:16px;">
+        Estos porcentajes se usan como valor inicial al registrar una venta nueva en "Equipo & Finanzas" — siempre se pueden ajustar venta a venta.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:420px;">
+        <div class="field" style="margin:0;"><label>% Comisión Closer</label><input id="cfg-pct-closer" type="number" step="0.01" value="${pctCloser}"></div>
+        <div class="field" style="margin:0;"><label>% Comisión CDV by JCerezo</label><input id="cfg-pct-cdv" type="number" step="0.01" value="${pctCdv}"></div>
+      </div>
+      <button class="btn-primary" style="max-width:200px;margin-top:6px;" onclick="guardarComisionesDefault()">Guardar</button>
+      <div id="cfg-msg" style="margin-top:10px;font-size:13px;"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Añadir nuevo usuario</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:560px;">
+        <div class="field" style="margin:0;"><label>Nombre</label><input id="nu-nombre"></div>
+        <div class="field" style="margin:0;"><label>Email</label><input id="nu-email" type="email"></div>
+        <div class="field" style="margin:0;"><label>Contraseña</label><input id="nu-clave" type="text" placeholder="Ej: zeren2026"></div>
+        <div class="field" style="margin:0;"><label>Rol</label>
+          <select id="nu-rol" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;" onchange="actualizarCamposRolNuevoUsuario()">
+            <option value="closer">Closer</option>
+            <option value="medico">Médico</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+      </div>
+      <div id="nu-flag-coordinador" class="field" style="max-width:560px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink);">
+          <input type="checkbox" id="nu-es-coordinador" style="width:auto;"> Es coordinador/a (ve a todos los closers y al médico)
+        </label>
+      </div>
+      <div id="nu-flag-gerente" class="field" style="display:none;max-width:560px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink);">
+          <input type="checkbox" id="nu-es-gerente" style="width:auto;"> Es gerente (ve leads, pipeline y cierres además de su agenda)
+        </label>
+      </div>
+      <button class="btn-primary" style="max-width:200px;margin-top:6px;" onclick="crearUsuario()">Crear usuario</button>
+      <div id="nu-msg" style="margin-top:10px;font-size:13px;"></div>
+    </div>
+  `;
+}
+
+function actualizarCamposRolNuevoUsuario(){
+  const rol = document.getElementById('nu-rol').value;
+  document.getElementById('nu-flag-coordinador').style.display = rol === 'closer' ? 'block' : 'none';
+  document.getElementById('nu-flag-gerente').style.display = rol === 'medico' ? 'block' : 'none';
+}
+
+async function guardarComisionesDefault(){
+  const pctCloser = parseFloat(document.getElementById('cfg-pct-closer').value);
+  const pctCdv = parseFloat(document.getElementById('cfg-pct-cdv').value);
+  const msg = document.getElementById('cfg-msg');
+  if(isNaN(pctCloser) || isNaN(pctCdv)){ msg.textContent = 'Introduce valores numéricos válidos.'; msg.style.color = 'var(--terracotta)'; return; }
+
+  const e1 = await sb.from('configuracion').update({ valor: String(pctCloser), actualizado_en: new Date().toISOString() }).eq('clave','comision_closer_default');
+  const e2 = await sb.from('configuracion').update({ valor: String(pctCdv), actualizado_en: new Date().toISOString() }).eq('clave','comision_cdv_default');
+  if(e1.error || e2.error){ msg.textContent = 'Error: ' + (e1.error?.message || e2.error?.message); msg.style.color = 'var(--terracotta)'; return; }
+
+  msg.textContent = 'Guardado correctamente.';
+  msg.style.color = 'var(--sage-deep)';
+}
+
+async function crearUsuario(){
+  const nombre = document.getElementById('nu-nombre').value.trim();
+  const email = document.getElementById('nu-email').value.trim().toLowerCase();
+  const clave = document.getElementById('nu-clave').value.trim();
+  const rol = document.getElementById('nu-rol').value;
+  const es_coordinador = rol === 'closer' && document.getElementById('nu-es-coordinador').checked;
+  const es_gerente = rol === 'medico' && document.getElementById('nu-es-gerente').checked;
+  const msg = document.getElementById('nu-msg');
+
+  if(!nombre || !email || !clave){ msg.textContent = 'Nombre, email y contraseña son obligatorios.'; msg.style.color = 'var(--terracotta)'; return; }
+
+  const { error } = await sb.from('usuarios').insert({ nombre, email, clave, rol, es_coordinador, es_gerente, activo: true });
+  if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+
+  msg.textContent = `Usuario "${nombre}" creado correctamente.`;
+  msg.style.color = 'var(--sage-deep)';
+  document.getElementById('nu-nombre').value = '';
+  document.getElementById('nu-email').value = '';
+  document.getElementById('nu-clave').value = '';
 }
 
 function logout(){
