@@ -393,6 +393,7 @@ async function renderSection(key){
     if(key === 'dashboard') content.innerHTML = await renderDashboard();
     else if(key === 'pipeline') content.innerHTML = await renderPipeline();
     else if(key === 'contactos') content.innerHTML = await renderContactos();
+    else if(key === 'equipo') content.innerHTML = await renderEquipo();
     else content.innerHTML = placeholder(key);
   }catch(e){
     content.innerHTML = `<div class="panel placeholder"><span class="tag">Error</span><div>${e.message}</div></div>`;
@@ -547,6 +548,151 @@ async function crearContacto(){
   msg.textContent = 'Contacto guardado correctamente.';
   msg.style.color = 'var(--sage-deep)';
   renderSection('contactos');
+}
+
+// ---------- EQUIPO & FINANZAS ----------
+async function getConfig(clave, fallback){
+  const { data } = await sb.from('configuracion').select('valor').eq('clave', clave).maybeSingle();
+  return data ? Number(data.valor) : fallback;
+}
+
+async function renderEquipo(){
+  const pctCloserDefault = await getConfig('comision_closer_default', 15);
+  const pctCdvDefault = await getConfig('comision_cdv_default', 15);
+
+  const { data: equipo, error: eqErr } = await sb.from('usuarios')
+    .select('id, nombre, rol, es_coordinador, es_gerente, comision_pct, activo')
+    .order('rol').order('nombre');
+  if(eqErr) throw eqErr;
+
+  const { data: comisiones, error: comErr } = await sb.from('comisiones')
+    .select('id, venta_valor, pct_closer, pct_cdv, monto_closer, monto_cdv, fecha_venta, estado_pago, contactos(nombre), usuarios(nombre)')
+    .order('fecha_venta', {ascending:false});
+  if(comErr) throw comErr;
+
+  const inicioMes = new Date(); inicioMes.setDate(1); inicioMes.setHours(0,0,0,0);
+  const pendiente = (comisiones||[]).filter(c=>c.estado_pago==='pendiente').reduce((s,c)=>s+Number(c.monto_cdv||0),0);
+  const pagadoMes = (comisiones||[]).filter(c=>c.estado_pago==='pagado' && new Date(c.fecha_venta) >= inicioMes).reduce((s,c)=>s+Number(c.monto_cdv||0),0);
+  const nVentasMes = (comisiones||[]).filter(c=>new Date(c.fecha_venta) >= inicioMes).length;
+
+  const eur = n => Number(n||0).toLocaleString('es-ES',{style:'currency',currency:'EUR'});
+
+  const filasEquipo = (equipo||[]).map(u=>{
+    const etiqueta = u.rol === 'admin' ? 'Admin'
+      : u.rol === 'medico' ? (u.es_gerente ? 'Médico · Gerente' : 'Médico')
+      : (u.es_coordinador ? 'Closer · Coordinador/a' : 'Closer');
+    const pct = u.comision_pct != null ? u.comision_pct : (u.rol==='closer' ? pctCloserDefault : null);
+    return `<tr>
+      <td>${u.nombre}</td><td>${etiqueta}</td>
+      <td>${pct != null ? pct+'%' : '—'}</td>
+      <td>${u.activo ? 'Activo' : 'Inactivo'}</td>
+    </tr>`;
+  }).join('');
+
+  const filasComisiones = (comisiones||[]).map(c=>`
+    <tr>
+      <td>${c.contactos ? c.contactos.nombre : '—'}</td>
+      <td>${c.usuarios ? c.usuarios.nombre : '—'}</td>
+      <td>${eur(c.venta_valor)}</td>
+      <td>${c.pct_cdv}%</td>
+      <td>${eur(c.monto_cdv)}</td>
+      <td>${new Date(c.fecha_venta).toLocaleDateString('es-ES')}</td>
+      <td>
+        ${c.estado_pago === 'pagado'
+          ? '<span style="color:var(--sage-deep);font-weight:600;">Pagado</span>'
+          : `<button onclick="marcarPagado('${c.id}')" style="font-size:12px;padding:4px 9px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;">Marcar pagado</button>`}
+      </td>
+    </tr>`).join('');
+
+  // contactos cerrados-ganados para el desplegable de nueva comisión
+  const { data: cerrados } = await sb.from('pipeline')
+    .select('contacto_id, contactos(id, nombre, closer_id)')
+    .eq('etapa','cerrado_ganado');
+  const opcionesContactos = (cerrados||[]).map(c=>c.contactos ? `<option value="${c.contactos.id}">${c.contactos.nombre}</option>` : '').join('');
+  const opcionesClosers = (equipo||[]).filter(u=>u.rol==='closer').map(u=>`<option value="${u.id}">${u.nombre}</option>`).join('');
+
+  return `
+    <div class="kpi-row">
+      <div class="kpi c4"><div class="num">${eur(pendiente)}</div><div class="label">Comisiones pendientes</div></div>
+      <div class="kpi c3"><div class="num">${eur(pagadoMes)}</div><div class="label">Pagado este mes</div></div>
+      <div class="kpi"><div class="num">${nVentasMes}</div><div class="label">Ventas registradas este mes</div></div>
+    </div>
+
+    <div class="panel">
+      <h3>Equipo</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+        <thead><tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
+          <th style="padding:6px 8px;">Nombre</th><th style="padding:6px 8px;">Rol</th>
+          <th style="padding:6px 8px;">% Comisión</th><th style="padding:6px 8px;">Estado</th>
+        </tr></thead>
+        <tbody>${filasEquipo || '<tr><td colspan="4">Sin usuarios.</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h3>Comisiones registradas</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+        <thead><tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
+          <th style="padding:6px 8px;">Contacto</th><th style="padding:6px 8px;">Closer</th>
+          <th style="padding:6px 8px;">Venta</th><th style="padding:6px 8px;">% CDV</th>
+          <th style="padding:6px 8px;">Comisión CDV</th><th style="padding:6px 8px;">Fecha</th><th style="padding:6px 8px;">Estado</th>
+        </tr></thead>
+        <tbody>${filasComisiones || '<tr><td colspan="7" style="color:var(--ink-soft);padding:14px 0;">Todavía no hay comisiones registradas.</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h3>Registrar venta / comisión</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:560px;">
+        <div class="field" style="margin:0;"><label>Contacto (cerrado ganado)</label>
+          <select id="nv-contacto" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;">
+            <option value="">— Selecciona —</option>${opcionesContactos}
+          </select>
+        </div>
+        <div class="field" style="margin:0;"><label>Closer</label>
+          <select id="nv-closer" style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:3px;font-family:inherit;">
+            <option value="">— Selecciona —</option>${opcionesClosers}
+          </select>
+        </div>
+        <div class="field" style="margin:0;"><label>Valor de la venta (€)</label><input id="nv-valor" type="number" step="0.01"></div>
+        <div class="field" style="margin:0;"><label>% comisión closer</label><input id="nv-pct-closer" type="number" step="0.01" value="${pctCloserDefault}"></div>
+        <div class="field" style="margin:0;"><label>% comisión CDV by JCerezo</label><input id="nv-pct-cdv" type="number" step="0.01" value="${pctCdvDefault}"></div>
+      </div>
+      <button class="btn-primary" style="max-width:220px;margin-top:6px;" onclick="crearComision()">Registrar comisión</button>
+      <div id="nv-msg" style="margin-top:10px;font-size:13px;"></div>
+    </div>
+  `;
+}
+
+async function marcarPagado(id){
+  const { error } = await sb.from('comisiones').update({ estado_pago: 'pagado' }).eq('id', id);
+  if(error){ alert('Error al actualizar: ' + error.message); return; }
+  renderSection('equipo');
+}
+
+async function crearComision(){
+  const contacto_id = document.getElementById('nv-contacto').value;
+  const closer_id = document.getElementById('nv-closer').value;
+  const venta_valor = parseFloat(document.getElementById('nv-valor').value);
+  const pct_closer = parseFloat(document.getElementById('nv-pct-closer').value);
+  const pct_cdv = parseFloat(document.getElementById('nv-pct-cdv').value);
+  const msg = document.getElementById('nv-msg');
+
+  if(!contacto_id || !closer_id || !venta_valor){
+    msg.textContent = 'Selecciona contacto, closer e introduce el valor de la venta.';
+    msg.style.color = 'var(--terracotta)';
+    return;
+  }
+
+  const { error } = await sb.from('comisiones').insert({
+    contacto_id, closer_id, venta_valor, pct_closer, pct_cdv,
+    mes_liquidacion: new Date().toISOString().slice(0,7)
+  });
+  if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+
+  msg.textContent = 'Comisión registrada correctamente.';
+  msg.style.color = 'var(--sage-deep)';
+  renderSection('equipo');
 }
 
 function logout(){
