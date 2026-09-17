@@ -327,6 +327,34 @@
       </div>
       <button onclick="closeContactModal()" style="border:none;background:none;font-size:22px;color:var(--ink-soft);cursor:pointer;line-height:1;">×</button>
     </div>
+
+    <div style="padding:16px 26px;border-bottom:1px solid var(--line);background:#FAF8F4;display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:16px;align-items:start;">
+      <div>
+        <label style="display:block;font-size:11.5px;color:var(--ink-soft);margin-bottom:4px;">Estado actual del lead</label>
+        <select id="cm-etapa-select" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13px;margin-bottom:6px;"></select>
+        <input id="cm-etapa-comentario" placeholder="Comentario (obligatorio para cambiar)" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:12.5px;margin-bottom:6px;">
+        <button onclick="guardarCambioEtapaFicha()" style="font-size:12px;padding:6px 12px;border:1px solid var(--sage-deep);color:var(--sage-deep);background:#fff;border-radius:3px;cursor:pointer;">Guardar cambio</button>
+        <div id="cm-etapa-msg" style="margin-top:5px;font-size:12px;"></div>
+      </div>
+      <div>
+        <label style="display:block;font-size:11.5px;color:var(--ink-soft);margin-bottom:4px;">Último contacto</label>
+        <div id="cm-ultimo-contacto" style="font-size:13px;color:var(--ink);font-weight:600;">—</div>
+      </div>
+      <div>
+        <label style="display:block;font-size:11.5px;color:var(--ink-soft);margin-bottom:4px;">Anotación rápida</label>
+        <input id="cm-accion-rapida" list="acciones-sugeridas" placeholder="Ej: Llamar mañana" style="width:100%;padding:8px 10px;border:2px solid var(--amber);border-radius:3px;font-family:inherit;font-size:13px;font-weight:600;color:#7A5A1E;background:#FFF8EC;">
+        <datalist id="acciones-sugeridas">
+          <option value="Volver a llamar">
+          <option value="Llamar mañana">
+          <option value="Cerrar cita">
+          <option value="Cobrar sesión">
+          <option value="Enviar propuesta">
+          <option value="Confirmar asistencia">
+        </datalist>
+        <button onclick="guardarAccionRapida()" style="margin-top:6px;font-size:12px;padding:6px 12px;border:1px solid var(--line);background:#fff;border-radius:3px;cursor:pointer;">Guardar</button>
+        <div id="cm-accion-msg" style="margin-top:5px;font-size:12px;"></div>
+      </div>
+    </div>
     <div style="display:grid;grid-template-columns:340px 1fr;flex:1;overflow:hidden;">
       <div style="padding:20px 22px;border-right:1px solid var(--line);overflow-y:auto;">
         <div class="field"><label>Nombre</label><input id="cm-f-nombre"></div>
@@ -357,6 +385,12 @@
           <textarea id="cm-clinica" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;font-family:inherit;font-size:13.5px;"></textarea>
           <button class="btn-primary" style="width:auto;padding:9px 16px;margin-top:8px;" onclick="guardarNotasClinicas()">Guardar notas clínicas</button>
           <div id="cm-clinica-msg" style="margin-top:6px;font-size:13px;"></div>
+        </div>
+
+        <div id="cm-eliminar-wrap" style="display:none;margin-top:22px;padding-top:18px;border-top:1px solid var(--terracotta);">
+          <div style="font-size:11.5px;color:var(--terracotta);font-weight:600;margin-bottom:6px;">ZONA DE PELIGRO</div>
+          <button onclick="eliminarContacto()" style="width:100%;padding:9px;border:1px solid var(--terracotta);color:var(--terracotta);background:#fff;border-radius:3px;font-family:inherit;font-size:13px;cursor:pointer;">Eliminar contacto</button>
+          <div id="cm-eliminar-msg" style="margin-top:6px;font-size:12.5px;"></div>
         </div>
       </div>
       <div style="padding:20px 22px;overflow-y:auto;">
@@ -822,7 +856,7 @@ async function confirmMoverLead(){
 // ---------- CONTACTOS ----------
 async function renderContactos(){
   const soyCloser = currentUser.rol === 'closer' && !ve_todo(currentUser);
-  let q = sb.from('contactos').select('id, nombre, telefono, email, origen, tratamiento_interes, estado, closer_id, sugerencias_medico, usuarios(nombre)').order('creado_en', {ascending:false});
+  let q = sb.from('contactos').select('id, nombre, telefono, email, origen, tratamiento_interes, estado, closer_id, sugerencias_medico, proxima_accion, usuarios(nombre)').order('creado_en', {ascending:false});
   if(soyCloser) q = q.eq('closer_id', currentUser.id);
   const { data, error } = await q;
   if(error) throw error;
@@ -883,7 +917,7 @@ async function renderContactos(){
           <tr style="text-align:left;color:var(--ink-soft);border-bottom:1px solid var(--line);">
             <th style="padding:6px 8px;">Nombre</th><th style="padding:6px 8px;">Teléfono</th>
             <th style="padding:6px 8px;">Tratamiento</th><th style="padding:6px 8px;">Closer</th><th style="padding:6px 8px;">Estado</th>
-            <th style="padding:6px 8px;">Último contacto</th>
+            <th style="padding:6px 8px;">Último contacto</th><th style="padding:6px 8px;">Anotación rápida</th>
           </tr>
         </thead>
         <tbody id="ct-tbody">${buildContactosRows(window._contactosCache, ultimosPorContacto)}</tbody>
@@ -921,9 +955,10 @@ function buildContactosRows(data, ultimosPorContacto){
       <td style="max-width:220px;">
         ${u ? `<div style="font-size:12.5px;color:var(--ink);">${u.comentario.length>60?u.comentario.slice(0,60)+'…':u.comentario}</div><div style="font-size:11px;color:var(--ink-soft);margin-top:2px;">${fRel(u.fecha_cambio)}</div>` : '<span style="color:var(--ink-soft);font-size:12.5px;">Sin actividad</span>'}
       </td>
+      <td>${c.proxima_accion ? `<span style="display:inline-block;background:#FFF8EC;border:1px solid var(--amber);color:#7A5A1E;font-weight:600;font-size:12px;padding:3px 9px;border-radius:3px;">${c.proxima_accion}</span>` : '<span style="color:var(--ink-soft);font-size:12.5px;">—</span>'}</td>
     </tr>`;
   }).join('');
-  if(!rows) rows = `<tr><td colspan="6" style="color:var(--ink-soft);padding:14px 0;">No hay contactos que coincidan con la búsqueda.</td></tr>`;
+  if(!rows) rows = `<tr><td colspan="7" style="color:var(--ink-soft);padding:14px 0;">No hay contactos que coincidan con la búsqueda.</td></tr>`;
   return rows;
 }
 
@@ -1028,8 +1063,78 @@ async function openContactoDetail(contactoId){
   await prepararBloqueReasignacion(c.closer_id);
   await prepararBloqueClinico(c.id, c.notas_clinicas);
   prepararBloqueTratamientos(c);
+  await prepararBarraEstado(c);
+  document.getElementById('cm-eliminar-wrap').style.display = currentUser.rol === 'admin' ? 'block' : 'none';
+  document.getElementById('cm-eliminar-msg').textContent = '';
   await cargarTimelineContacto(contactoId);
   document.getElementById('contact-modal').style.display = 'flex';
+}
+
+async function eliminarContacto(){
+  const msg = document.getElementById('cm-eliminar-msg');
+  const nombre = document.getElementById('cm-nombre').textContent;
+  const ok = window.confirm(`¿Seguro que quieres eliminar a "${nombre}"?\n\nSe borrará también todo su historial de pipeline y calendario asociado. Esta acción no se puede deshacer.`);
+  if(!ok) return;
+
+  const { error } = await sb.from('contactos').delete().eq('id', contactoActual.id);
+  if(error){
+    if(error.message.includes('foreign key') || error.code === '23503'){
+      msg.textContent = 'No se puede eliminar: este contacto tiene comisiones registradas. Elimina primero esa comisión en "Equipo & Finanzas".';
+    } else {
+      msg.textContent = 'Error: ' + error.message;
+    }
+    msg.style.color = 'var(--terracotta)';
+    return;
+  }
+
+  closeContactModal();
+  renderSection('contactos');
+}
+
+async function prepararBarraEstado(c){
+  const sel = document.getElementById('cm-etapa-select');
+  sel.innerHTML = STAGES.map(([key,label])=>`<option value="${key}" ${key===contactoActual.etapaActual?'selected':''}>${label}</option>`).join('');
+  document.getElementById('cm-etapa-comentario').value = '';
+  document.getElementById('cm-etapa-msg').textContent = '';
+  document.getElementById('cm-accion-rapida').value = c.proxima_accion || '';
+  document.getElementById('cm-accion-msg').textContent = '';
+
+  const { data: ultimo } = await sb.from('pipeline_historial')
+    .select('fecha_cambio').eq('contacto_id', c.id).order('fecha_cambio', {ascending:false}).limit(1).maybeSingle();
+  document.getElementById('cm-ultimo-contacto').textContent = ultimo ? new Date(ultimo.fecha_cambio).toLocaleString('es-ES', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : 'Sin actividad todavía';
+}
+
+async function guardarCambioEtapaFicha(){
+  const nuevaEtapa = document.getElementById('cm-etapa-select').value;
+  const comentario = document.getElementById('cm-etapa-comentario').value.trim();
+  const msg = document.getElementById('cm-etapa-msg');
+  if(!comentario){ msg.textContent = 'El comentario es obligatorio.'; msg.style.color = 'var(--terracotta)'; return; }
+  if(nuevaEtapa === contactoActual.etapaActual){ msg.textContent = 'Elige una etapa distinta a la actual.'; msg.style.color = 'var(--terracotta)'; return; }
+
+  const { error: e1 } = await sb.from('pipeline').update({ etapa: nuevaEtapa, fecha_cambio_etapa: new Date().toISOString() }).eq('contacto_id', contactoActual.id);
+  if(e1){ msg.textContent = 'Error: ' + e1.message; msg.style.color = 'var(--terracotta)'; return; }
+  const { error: e2 } = await sb.from('pipeline_historial').insert({
+    contacto_id: contactoActual.id, etapa_anterior: contactoActual.etapaActual, etapa_nueva: nuevaEtapa,
+    comentario, usuario_id: currentUser.id
+  });
+  if(e2){ msg.textContent = 'Error: ' + e2.message; msg.style.color = 'var(--terracotta)'; return; }
+
+  contactoActual.etapaActual = nuevaEtapa;
+  document.getElementById('cm-sub').textContent = STAGES.find(s=>s[0]===nuevaEtapa)?.[1] || nuevaEtapa;
+  document.getElementById('cm-etapa-comentario').value = '';
+  msg.textContent = 'Etapa actualizada.';
+  msg.style.color = 'var(--sage-deep)';
+  await cargarTimelineContacto(contactoActual.id);
+  document.getElementById('cm-ultimo-contacto').textContent = new Date().toLocaleString('es-ES', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
+}
+
+async function guardarAccionRapida(){
+  const valor = document.getElementById('cm-accion-rapida').value.trim();
+  const msg = document.getElementById('cm-accion-msg');
+  const { error } = await sb.from('contactos').update({ proxima_accion: valor || null }).eq('id', contactoActual.id);
+  if(error){ msg.textContent = 'Error: ' + error.message; msg.style.color = 'var(--terracotta)'; return; }
+  msg.textContent = 'Guardado.';
+  msg.style.color = 'var(--sage-deep)';
 }
 
 function prepararBloqueTratamientos(c){
